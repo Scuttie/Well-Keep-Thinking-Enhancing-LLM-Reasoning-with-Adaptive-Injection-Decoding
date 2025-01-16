@@ -268,6 +268,10 @@ def generate_text_sentence_by_sentence_greedy(
     return final_text
 
 if __name__ == "__main__":
+
+    from datasets import load_dataset
+    dataset = load_dataset("openai/gsm8k", "main")
+    
     model_path = "meta-llama/Llama-3.1-8B"
     tokenizer, model = load_llama7b_model(model_path, device="cuda")
 
