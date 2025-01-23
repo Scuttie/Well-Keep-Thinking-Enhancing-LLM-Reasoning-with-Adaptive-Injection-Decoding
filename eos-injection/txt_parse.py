@@ -82,6 +82,6 @@ def parse_text_file(input_file, output_csv):
     print(f"Parsed data saved to {output_csv}")
 
 # Example usage
-input_file = "/home/hyun/eos/sole-step-once-injection.txt" 
-output_csv = "./sole-step-once-injection.csv"  
+input_file = "./results/Mistral-7B-v0.1/gsm8k/zero-shot promp + or_.txt" 
+output_csv = "./results/Mistral-7B-v0.1/gsm8k/zero-shot promp + or_.csv"  
 parse_text_file(input_file, output_csv)

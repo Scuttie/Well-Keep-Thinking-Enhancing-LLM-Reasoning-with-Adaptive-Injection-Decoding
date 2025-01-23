@@ -1,0 +1,5 @@
+srun: got SIGCONT
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+slurmstepd-laal2: error: *** JOB 4605 ON laal2 CANCELLED AT 2025-01-23T11:30:32 ***
+Downloading shards:   0%|          | 0/2 [00:00<?, ?it/s]Downloading shards:  50%|█████     | 1/2 [11:59<11:59, 719.61s/it]slurmstepd-laal2: error: *** STEP 4605.0 ON laal2 CANCELLED AT 2025-01-23T11:30:32 ***
+srun: forcing job termination

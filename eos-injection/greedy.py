@@ -16,66 +16,24 @@ def configure_model(model_path):
     return model, tokenizer
 
 
-def generate_response(model, tokenizer, inputs, max_length=500, conjunction_pool=None):
+def generate_response(prompt, model, tokenizer, max_length=500):
     """
     Generate a response from the model using greedy decoding.
     Handles conjunctions correctly, even multi-word ones.
     """
-    response = []
-    device = next(model.parameters()).device
-    inputs['input_ids'] = inputs['input_ids'].to(device)
 
-    prompt_length = inputs['input_ids'].size(1)  # Get the length of the prompt
+    # return final_text
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to("cuda")
+    prompt_length = inputs.input_ids.size(1)
 
-    for _ in range(max_length):
-        with torch.no_grad():
-            outputs = model(**inputs, return_dict=True)
-            next_token_logits = outputs.logits[:, -1, :]
-
-        # Select the token with the highest probability (greedy decoding)
-        next_token_id = torch.argmax(next_token_logits, dim=-1)
-
-        # Check for EOS token
-        if next_token_id.item() == tokenizer.eos_token_id:  
-            print("EOS encountered. Replacing with a random conjunction from the pool.")
-            conjunction = random.choice(conjunction_pool)
-            
-            # Encode conjunction as a single sequence of tokens
-            conjunction_ids = tokenizer.encode(conjunction, add_special_tokens=False)
-            
-            # Append the tokens in the conjunction without splitting
-            print(f"Injected Conjunction: {conjunction}")
-
-            for token_id in conjunction_ids:
-                response.append(token_id)
-                next_token_tensor = torch.tensor([[token_id]], device=device)
-                inputs['input_ids'] = torch.cat([inputs['input_ids'], next_token_tensor], dim=1)
-
-        else:
-            # Regular greedy token selection
-            response.append(next_token_id.item())
-            next_token_tensor = torch.tensor([[next_token_id]], device=device)
-            inputs['input_ids'] = torch.cat([inputs['input_ids'], next_token_tensor], dim=1)
-
-        # Stop generation if max length is reached
-        if len(response) >= max_length:
-            print("\nMaximum length reached.")
-            break
-
+    # Generate the model's response
+    outputs = model.generate(inputs.input_ids, attention_mask=inputs.attention_mask, max_new_tokens=200)
+    
+    # Decode the output
     # Decode the final response
-    final_response = tokenizer.decode(inputs['input_ids'][0, prompt_length:], skip_special_tokens=True)
+    final_response = tokenizer.decode(outputs[0, prompt_length:], skip_special_tokens=True)
     print("\nFinal Generated Text:", final_response)
     return final_response
-
-
-def run_example(prompt, model, tokenizer, conjunction_pool, max_length=300):
-    """
-    Run greedy decoding for a given prompt and print the results.
-    """
-    device = next(model.parameters()).device
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    final = generate_response(model, tokenizer, inputs, max_length, conjunction_pool)
-    return final
 
 
 def main():
@@ -127,14 +85,6 @@ def main():
         "step"
     ]
 
-    next_step = [
-        "Next step"
-    ]
-
-    or_ = [
-        "Or"
-    ]
-
     ## article pool
     article_pool = ["The", "A", "An"]
 
@@ -151,12 +101,8 @@ def main():
 
     ###### 설정
     dataset_path = "openai/gsm8k"
-    model_path = "lmsys/vicuna-7b-v1.5" #mistralai/Mistral-7B-v0.3
-    method_explain = "step" #띄어쓰기 없이 #sole-step
-    method_pool = step
-    # zeroshot_prompt =  " Let's think step by step. "
-    zeroshot_prompt =  ""
-
+    model_path = "lmsys/vicuna-7b-v1.5" # mistralai/Mistral-7B-v0.3
+    method_explain = "greedy" #띄어쓰기 없이 #sole-step
 
 
     ###### 실행
@@ -193,9 +139,7 @@ def main():
             f.write("\n[정답]\n")
             f.write(f"#### {gold_answer}\n")
 
-            prompt = question_text + zeroshot_prompt
-
-            final = run_example(prompt, model, tokenizer, method_pool)
+            final = generate_response(question_text, model, tokenizer,  max_length=500)
 
             f.write("\n--- [A] final answer ---\n")
             f.write(final + "\n")
