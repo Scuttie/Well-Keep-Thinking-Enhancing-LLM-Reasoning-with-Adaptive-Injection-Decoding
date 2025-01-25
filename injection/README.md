@@ -1,6 +1,3 @@
-Below is a sample `README.md` in English with a more sophisticated tone. Feel free to adapt the text to match your specific use case or style.
-
----
 
 # Overview
 
