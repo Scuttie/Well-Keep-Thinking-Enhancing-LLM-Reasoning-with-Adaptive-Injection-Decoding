@@ -99,8 +99,8 @@ python main.py \
     --dataset HuggingFaceH4/MATH-500 \
     --model_name meta-llama/Llama-3.1-8B \
     --methods zs_cot step_injection top_k_injection \
-    --max_samples 50 \
-    --max_length 300 \
+    --max_samples 100 \
+    --max_length 500 \
     --output_dir ./results
 ```
 
