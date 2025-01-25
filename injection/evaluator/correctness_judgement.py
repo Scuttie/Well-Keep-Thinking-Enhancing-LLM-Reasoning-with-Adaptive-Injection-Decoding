@@ -40,7 +40,7 @@ def judge_correctness_with_gold(
     ]
 
     # GPT API 호출
-    response = llm.ChatCompletion.create(
+    response = llm.chat.completions.create(
         model="gpt-4o-mini",  # 예시 모델명, 필요시 수정
         messages=chat_history,
         temperature=0.7
