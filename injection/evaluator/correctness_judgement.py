@@ -32,7 +32,7 @@ def judge_correctness_with_gold(
             "role": "user",
             "content": (
                 f"Question: {question}\n"
-                f"Gold Answer: {gold_answer}\n"
+                f"Answer: {answer}\n"
                 f"LLM Response: {llm_answer}\n\n"
                 "Is the predicted answer correct?"
             )
@@ -41,7 +41,7 @@ def judge_correctness_with_gold(
 
     # GPT API 호출
     response = llm.chat.completions.create(
-        model="gpt-4o-mini",  # 예시 모델명, 필요시 수정
+        model="gpt-4o-mini",  
         messages=chat_history,
         temperature=0.7
     )
