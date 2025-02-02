@@ -1,52 +1,152 @@
 import re
 import pandas as pd
 from datasets import load_dataset
+import os
 
 from model_utils.generation_methods import (
     generate_greedy_decoding,
     generate_zero_shot_cot,
     generate_step_injection,
     generate_top_k_injection,
-    generate_zs_next_step
+    generate_zs_next_step,
+    generate_zs_top_k_multiple_injection_with_patience
 )
 
 from parser.parser_code import parse_txt_to_csv
 from evaluator.correctness_judgement import add_correctness_column_with_gold
 
-
-########################################
-# 2. (모델, Method)에 대해 실험 수행 -> txt 저장
-########################################
-def run_experiment_for_method(
+def run_experiment_for_method_commonsenseqa(
     model,
     tokenizer,
     dataset,
     method_name,
     output_txt_path,
     max_samples=100,
-    max_length=500
+    max_length=500,
+    top_k_value=10,
+    injection_token="Step",
+    patience_value=50,
+    with_cot_init=False,
 ):
     """
-    주어진 (model, tokenizer)에 대해 dataset 상위 max_samples개를
-    method_name에 해당하는 방식으로 디코딩 후, output_txt_path에 결과 저장.
-    (GSM8K 등 question/answer 형식)
+    CommonsenseQA 전용:
+      - dataset[i]['question'], dataset[i]['answer']
+      - chain-of-thought 등은 따로 없으니 간단히 처리
     """
-    generation_fn_map = {
-        "greedy": generate_greedy_decoding,
-        "zs_cot": generate_zero_shot_cot,
-        "step_injection": generate_step_injection,
-        "top_k_injection": generate_top_k_injection,
-        "zs_next_step": generate_zs_next_step
-    }
+    def gen_fn(_prompt):
+        if method_name == "greedy":
+            return generate_greedy_decoding(model, tokenizer, _prompt, max_length)
+        elif method_name == "zs_cot":
+            return generate_zero_shot_cot(model, tokenizer, _prompt, max_length)
+        elif method_name == "step_injection":
+            return generate_step_injection(model, tokenizer, _prompt,
+                                           max_length=max_length,
+                                           injection_token=injection_token)
+        elif method_name == "top_k_injection":
+            return generate_top_k_injection(
+                model, tokenizer, _prompt,
+                k=top_k_value,
+                injection_token=injection_token,
+                max_length=max_length,
+                with_cot_init=with_cot_init
+            )
+        elif method_name == "zs_next_step":
+            return generate_zs_next_step(model, tokenizer, _prompt,
+                                         max_length=max_length,
+                                         injection_token=injection_token)
+        elif method_name == "zs_top_k_multi_inject_patience":
+            return generate_zs_top_k_multiple_injection_with_patience(
+                model, tokenizer, _prompt,
+                k=top_k_value,
+                injection_token=injection_token,
+                patience=patience_value,
+                max_length=max_length
+            )
+        else:
+            raise ValueError(f"Unknown method_name: {method_name}")
 
-    gen_fn = generation_fn_map[method_name]
+    # dataset은 이미 Dataset 형태 (train/test 분할 없음), len(dataset)
+    num_data = len(dataset)
+
+    with open(output_txt_path, "w", encoding="utf-8") as f:
+        for i in range(num_data):
+            if i >= max_samples:
+                break
+
+            question_text = dataset[i]["question"]
+            gold_answer = dataset[i]["answer"]
+
+            f.write(f"\n{'='*28}\n")
+            f.write(f"Sample #{i+1}\n")
+            f.write(f"Question: {question_text}\n")
+
+            f.write("\n[정답]\n")
+            f.write(f"#### {gold_answer}\n")
+
+            # 모델 생성
+            final_answer = gen_fn(question_text)
+
+            f.write("\n--- [A] final answer ---\n")
+            f.write(final_answer + "\n")
+            f.write(f"{'='*28}\n\n")
+
+    print(f"[{method_name}] (CommonsenseQA) 결과 저장 완료 -> {output_txt_path}")
+
+
+def run_experiment_for_method_gsm8k(
+    model,
+    tokenizer,
+    dataset,
+    method_name,
+    output_txt_path,
+    max_samples=100,
+    max_length=500,
+    top_k_value=10,
+    injection_token="Step",
+    patience_value=50
+):
+    """
+    기존 GSM8K 스타일 (dataset['test']['question'], dataset['test']['answer']에서 분리)
+    '####' 전후로 chain_of_thought / gold_answer 분리하는 방식
+    """
+    def gen_fn(_prompt):
+        if method_name == "greedy":
+            return generate_greedy_decoding(model, tokenizer, _prompt, max_length)
+        elif method_name == "zs_cot":
+            return generate_zero_shot_cot(model, tokenizer, _prompt, max_length)
+        elif method_name == "step_injection":
+            return generate_step_injection(model, tokenizer, _prompt,
+                                           max_length=max_length,
+                                           injection_token=injection_token)
+        elif method_name == "top_k_injection":
+            return generate_top_k_injection(
+                model, tokenizer, _prompt,
+                k=top_k_value,
+                injection_token=injection_token,
+                max_length=max_length
+            )
+        elif method_name == "zs_next_step":
+            return generate_zs_next_step(model, tokenizer, _prompt,
+                                         max_length=max_length,
+                                         injection_token=injection_token)
+        elif method_name == "zs_top_k_multi_inject_patience":
+            return generate_zs_top_k_multiple_injection_with_patience(
+                model, tokenizer, _prompt,
+                k=top_k_value,
+                injection_token=injection_token,
+                patience=patience_value,
+                max_length=max_length
+            )
+        else:
+            raise ValueError(f"Unknown method_name: {method_name}")
+
+    num_data = len(dataset['test']['question'])
 
     with open(output_txt_path, "w", encoding="utf-8") as f:
         for i, question_text in enumerate(dataset['test']['question']):
             if i >= max_samples:
                 break
 
-            # 모범답안/정답 분리
             cot_with_answer = dataset['test']['answer'][i]
             splitted = cot_with_answer.split("####")
             chain_of_thought = splitted[0].strip() if len(splitted) > 0 else ""
@@ -61,13 +161,13 @@ def run_experiment_for_method(
             f.write("\n[정답]\n")
             f.write(f"#### {gold_answer}\n")
 
-            final_answer = gen_fn(model, tokenizer, question_text, max_length=max_length)
+            final_answer = gen_fn(question_text)
 
             f.write("\n--- [A] final answer ---\n")
             f.write(final_answer + "\n")
             f.write(f"{'='*28}\n\n")
 
-    print(f"[{method_name}] 결과 저장 완료 -> {output_txt_path}")
+    print(f"[{method_name}] (GSM8K) 결과 저장 완료 -> {output_txt_path}")
 
 
 def run_experiment_for_method_math500(
@@ -77,23 +177,44 @@ def run_experiment_for_method_math500(
     method_name,
     output_txt_path,
     max_samples=100,
-    max_length=500
+    max_length=500,
+    top_k_value=10,
+    injection_token="Step",
+    patience_value=50
 ):
     """
-    MATH-500 전용 함수:
-      - dataset['test']에는 "problem", "answer", "solution" 컬럼이 있다고 가정.
-      - problem -> Question
-      - answer -> 모범답안(Chain-of-Thought)
-      - solution -> 골드 정답이 들어 있는 문자열(\\boxed{...} 등)
+    MATH-500 전용
     """
-    generation_fn_map = {
-        "greedy": generate_greedy_decoding,
-        "zs_cot": generate_zero_shot_cot,
-        "step_injection": generate_step_injection,
-        "top_k_injection": generate_top_k_injection,
-        "zs_next_step": generate_zs_next_step
-    }
-    gen_fn = generation_fn_map[method_name]
+    def gen_fn(_prompt):
+        if method_name == "greedy":
+            return generate_greedy_decoding(model, tokenizer, _prompt, max_length)
+        elif method_name == "zs_cot":
+            return generate_zero_shot_cot(model, tokenizer, _prompt, max_length)
+        elif method_name == "step_injection":
+            return generate_step_injection(model, tokenizer, _prompt,
+                                           max_length=max_length,
+                                           injection_token=injection_token)
+        elif method_name == "top_k_injection":
+            return generate_top_k_injection(
+                model, tokenizer, _prompt,
+                k=top_k_value,
+                injection_token=injection_token,
+                max_length=max_length
+            )
+        elif method_name == "zs_next_step":
+            return generate_zs_next_step(model, tokenizer, _prompt,
+                                         max_length=max_length,
+                                         injection_token=injection_token)
+        elif method_name == "zs_top_k_multi_inject_patience":
+            return generate_zs_top_k_multiple_injection_with_patience(
+                model, tokenizer, _prompt,
+                k=top_k_value,
+                injection_token=injection_token,
+                patience=patience_value,
+                max_length=max_length
+            )
+        else:
+            raise ValueError(f"Unknown method_name: {method_name}")
 
     test_data = dataset['test']
     num_data = len(test_data)
@@ -103,14 +224,11 @@ def run_experiment_for_method_math500(
             if i >= max_samples:
                 break
 
-            # 1) Question
             question_text = test_data['problem'][i]
-
-            # 2) 모범답안(Chain-of-Thought)
             chain_of_thought = test_data['answer'][i] if test_data['answer'][i] else ""
-
-            # 3) gold answer 추출 (\boxed{...})
             solution_text = test_data['solution'][i] if test_data['solution'][i] else ""
+
+            # \boxed{...} 추출
             matches = re.findall(r'\\boxed\{(.*?)\}', solution_text)
             if matches:
                 gold_answer = matches[-1].strip()
@@ -126,7 +244,7 @@ def run_experiment_for_method_math500(
             f.write("\n[정답]\n")
             f.write(f"#### {gold_answer}\n")
 
-            final_answer = gen_fn(model, tokenizer, question_text, max_length=max_length)
+            final_answer = gen_fn(question_text)
 
             f.write("\n--- [A] final answer ---\n")
             f.write(final_answer + "\n")
@@ -145,7 +263,11 @@ def run_full_pipeline(
     methods,
     max_samples=100,
     max_length=500,
-    output_dir="."
+    output_dir=".",
+    top_k_value=10,
+    injection_token="Step",
+    patience_value=50,
+    with_cot_init=False,
 ):
     """
     전체 파이프라인 실행:
@@ -153,15 +275,18 @@ def run_full_pipeline(
       - txt -> csv 변환
       - GPT(OpenAI)로 정오답 판정 -> csv 컬럼 추가
     """
-    # dataset_name 에 따라, GSM8K 스타일인지 MATH-500 스타일인지 분기
-    # (여기서는 'MATH-500'이라는 키워드로만 단순하게 구분 예시)
-    is_math500 = "math-500" in dataset_name.lower()
+    os.makedirs(output_dir, exist_ok=True)
 
     from parser.parser_code import parse_txt_to_csv
 
+    # 어떤 전용 함수를 쓸지 분기
+    is_math500 = "math-500" in dataset_name.lower()
+    is_commonsense = "commonsenseqa" in dataset_name.lower()
+    # 그 외 GSM8K류
+
     for method_name in methods:
-        # txt
         output_txt_path = f"{output_dir}/{model_name}_{method_name}.txt"
+
         if is_math500:
             run_experiment_for_method_math500(
                 model=model,
@@ -170,17 +295,38 @@ def run_full_pipeline(
                 method_name=method_name,
                 output_txt_path=output_txt_path,
                 max_samples=max_samples,
-                max_length=max_length
+                max_length=max_length,
+                top_k_value=top_k_value,
+                injection_token=injection_token,
+                patience_value=patience_value
             )
-        else:
-            run_experiment_for_method(
+        elif is_commonsense:
+            run_experiment_for_method_commonsenseqa(
                 model=model,
                 tokenizer=tokenizer,
                 dataset=dataset,
                 method_name=method_name,
                 output_txt_path=output_txt_path,
                 max_samples=max_samples,
-                max_length=max_length
+                max_length=max_length,
+                top_k_value=top_k_value,
+                injection_token=injection_token,
+                patience_value=patience_value,
+                with_cot_init=with_cot_init
+            )
+        else:
+            # GSM8K 스타일
+            run_experiment_for_method_gsm8k(
+                model=model,
+                tokenizer=tokenizer,
+                dataset=dataset,
+                method_name=method_name,
+                output_txt_path=output_txt_path,
+                max_samples=max_samples,
+                max_length=max_length,
+                top_k_value=top_k_value,
+                injection_token=injection_token,
+                patience_value=patience_value
             )
 
         # txt -> csv
@@ -188,10 +334,13 @@ def run_full_pipeline(
         parse_txt_to_csv(output_txt_path, output_csv_path)
 
         # GPT(OpenAI) 평가
-        df = pd.read_csv(output_csv_path)
-        df_eval = add_correctness_column_with_gold(df, llm=llm)  # GPT 평가
-        final_csv_path = f"{output_dir}/{model_name}_{method_name}_evaluated.csv"
-        df_eval.to_csv(final_csv_path, index=False, encoding='utf-8')
-        print(f"Final Evaluation CSV saved -> {final_csv_path}")
+        if llm is not None:
+            df = pd.read_csv(output_csv_path)
+            df_eval = add_correctness_column_with_gold(df, llm=llm)
+            final_csv_path = f"{output_dir}/{model_name}_{method_name}_evaluated.csv"
+            df_eval.to_csv(final_csv_path, index=False, encoding='utf-8')
+            print(f"Final Evaluation CSV saved -> {final_csv_path}")
+        else:
+            print("llm(None) -> GPT 평가 스킵")
 
     print("\n[모든 실험 완료]")
