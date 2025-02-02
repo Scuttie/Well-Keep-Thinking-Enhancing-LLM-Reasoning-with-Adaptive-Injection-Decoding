@@ -4,13 +4,16 @@ import csv
 def parse_txt_to_csv(input_path, output_path):
     """
     주어진 txt 파일을 파싱하여 CSV로 저장합니다.
+    (CommonsenseQA, GSM8K 등에서 공통 사용 가능하게 수정)
 
-    * 수정 사항:
-      - Question 부분을 추출 후 sample_chunk에서 제거하여,
-        이후 llm_answer 파트에서 Question이 노출되지 않도록 함.
+    1) "Test sample #(\d+)" 뿐 아니라 "Sample #(\d+)" 도 잡히도록 정규식 변경
+    2) [모범답안] 블록은 없으면 None 처리
+    3) CommonsenseQA 방식에서는 "Sample #(\d+)" 아래에
+       Question / [정답] / --- [A] final answer --- 식으로만 들어가므로,
+       해당 부분이 없어도(예: [모범답안]) 에러 없이 넘어가게끔 처리
     """
 
-    # 1) 텍스트 파일 전체를 읽어서, 특정 불필요 문구가 들어있는 줄 제거
+    # 1) 텍스트 파일 읽기 + 특정 불필요 문구 제거
     skip_keywords = [
         "You are a helpful assistant",
         "If you have finished your reasoning",
@@ -29,41 +32,44 @@ def parse_txt_to_csv(input_path, output_path):
 
     text = "".join(cleaned_lines)
 
-    # 2) 28개 이상의 '='로 구분되는 샘플 블록을 찾는다.
+    # 2) 샘플 블록 정규식:
+    #    "Test sample #(\d+)" 또는 "Sample #(\d+)" 로 시작하는 구간을 추출
     pattern_samples = re.compile(
-        r'(?s)(?:=){28,}\s*\nTest sample #(\d+)(.*?)(?=(?:=){28,}\s*\nTest sample #\d+|$)'
+        r'(?s)(?:=){28,}\s*\n(?:Test sample|Sample)\s*#(\d+)(.*?)(?=(?:=){28,}\s*\n(?:Test sample|Sample)\s*#\d+|$)'
     )
-    test_samples = pattern_samples.findall(text)
+    sample_blocks = pattern_samples.findall(text)
 
     rows = []
 
-    # 각 샘플 블록 파싱
-    for sample_num_str, sample_chunk in test_samples:
+    # 3) 각 샘플 블록 파싱
+    for sample_num_str, sample_chunk in sample_blocks:
         sample_num = sample_num_str.strip()
 
-        # (1) Question 추출
+        # (A) Question 추출
+        #     [모범답안], [정답], --- 등 전/후로 끊기
         q_match = re.search(
             r'(?s)Question:\s*(.*?)(?=\[모범답안\]|\[정답\]|---|$)',
             sample_chunk
         )
-
         if q_match:
             question_full_text = q_match.group(0)
             question_text = q_match.group(1).strip()
-
-            # Question 전체를 sample_chunk에서 제거 -> 이후 블록(llm_answer) 파싱 시 Question 제외
+            # 필요시 sample_chunk에서 Question 부분 제거 가능 (원본 코드처럼)
             sample_chunk = sample_chunk.replace(question_full_text, "")
         else:
             question_text = ""
 
-        # (2) [모범답안] 블록 추출
+        # (B) [모범답안] (optional)
         gold_match = re.search(
             r'(?s)\[모범답안\]\s*(.*?)(?=\[정답\]|---|$)',
             sample_chunk
         )
-        gold_answer = gold_match.group(1).strip() if gold_match else ""
+        if gold_match:
+            gold_answer = gold_match.group(1).strip()
+        else:
+            gold_answer = ""
 
-        # (3) [정답] 블록에서 "#### 숫자" 추출
+        # (C) [정답] 블록에서 "#### ..." 추출
         answer_text = ""
         answer_block_match = re.search(
             r'(?s)\[정답\]\s*(.*?)(?=---|$)',
@@ -75,36 +81,62 @@ def parse_txt_to_csv(input_path, output_path):
             if ans_match:
                 answer_text = ans_match.group(1).strip()
 
-        # (4) --- [A/B/C/...] 형태 블록들 파싱
+        # (D) --- [A/B/C/...] 형태 블록들 파싱
+        #     여러 블록이 있을 수도 있으므로 기존 코드대로 정규식 사용
         block_pattern = re.compile(
             r'(?s)---\s*\[([A-Za-z0-9]+)\]\s+(.*?)\s+---\s*(.*?)(?=---\s*\[[A-Za-z0-9]+\]|$)'
         )
         blocks = block_pattern.findall(sample_chunk)
 
-        # (5) elapsed_time (필요 시 추가 가능)
-        elapsed_time = ""
-
+        # 블록이 하나도 안 잡히면(CommonsenseQA처럼 --- [A] final answer ---만 있을 때)
+        # 위 정규식이 실패하는 경우가 있으니, 여기서 별도 예외 처리
+        # (ex. "final answer"라는 문자열 뒤에 줄바꿈만 있고 추가 "---"가 없으면 패턴이 깨질 수 있음)
         if not blocks:
-            # 블록이 없는 경우는 무시(혹은 다른 방식 처리 가능)
-            continue
+            # 간단히 '--- [A]' 단일 블록만이라도 잡아보는 정규식
+            single_block_match = re.search(
+                r'(?s)---\s*\[([A-Za-z0-9]+)\]\s+(.*?)\s+---\s*(.*)',
+                sample_chunk
+            )
+            if single_block_match:
+                blocks = [single_block_match.groups()]  # 튜플 하나로
+            else:
+                # 블록이 전혀 없다면 CSV에 기록할 데이터가 없는 것과 같으므로 넘어감
+                # (원하는 로직에 따라 처리)
+                pass
 
-        # (6) 블록들을 순회하며 CSV row 생성
-        for (block_tag, block_label, block_content) in blocks:
-            block_type = f"[{block_tag}] {block_label}".strip()
-            llm_answer = block_content.strip()
-
+        # (E) 블록을 순회하며 CSV 행 생성
+        #     CommonsenseQA는 보통 --- [A] final answer --- 하나만 있을 테니
+        #     blocks가 1개일 확률이 큼
+        if not blocks:
+            # 그래도 최소 한 줄을 뽑고 싶다면, 아래처럼 "llm_answer"=None으로 생성 가능
             row = {
                 "number": sample_num,
-                "type": block_type,
+                "type": "",  # 블록 태그 없음
                 "question": question_text,
                 "gold_answer": gold_answer,
                 "answer": answer_text,
-                "llm_answer": llm_answer,
-                "elapsed_time": elapsed_time
+                "llm_answer": "",
+                "elapsed_time": ""
             }
             rows.append(row)
+        else:
+            # 여러 블록이 있을 때도 각각 row로 저장
+            for (block_tag, block_label, block_content) in blocks:
+                block_type = f"[{block_tag}] {block_label}".strip()
+                llm_answer = block_content.strip()
 
-    # 3) CSV 저장
+                row = {
+                    "number": sample_num,
+                    "type": block_type,
+                    "question": question_text,
+                    "gold_answer": gold_answer,
+                    "answer": answer_text,
+                    "llm_answer": llm_answer,
+                    "elapsed_time": ""
+                }
+                rows.append(row)
+
+    # 4) CSV 저장
     fieldnames = [
         "number",
         "type",
