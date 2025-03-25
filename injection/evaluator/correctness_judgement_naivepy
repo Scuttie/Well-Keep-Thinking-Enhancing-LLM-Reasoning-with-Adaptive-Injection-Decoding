@@ -1,9 +1,6 @@
 import pandas as pd
 from tqdm import tqdm
 
-########################################
-# 1. GPT에게 정오답 판정 (Question/Gold/Answer/LLM 사용)
-########################################
 def judge_correctness_with_gold(
     llm,
     question: str,
@@ -35,13 +32,13 @@ def judge_correctness_with_gold(
                 f"Answer: {answer}\n"
                 f"LLM Response: {llm_answer}\n\n"
                 "Is the predicted answer correct?"
+                "If the response is empty, respond exactly with 'incorrect'."
             )
         }
     ]
 
-    # GPT API 호출
     response = llm.chat.completions.create(
-        model="gpt-4o-mini",  
+        model="gpt-4o-mini", 
         messages=chat_history,
         temperature=0.7
     )
@@ -50,9 +47,6 @@ def judge_correctness_with_gold(
     return final_response
 
 
-########################################
-# 2. df 에 대해 정오답 판정 컬럼 추가
-########################################
 def add_correctness_column_with_gold(df: pd.DataFrame, llm) -> pd.DataFrame:
     """
     df 의 각 행에 대해:
