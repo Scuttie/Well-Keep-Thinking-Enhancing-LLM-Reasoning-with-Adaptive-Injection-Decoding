@@ -15,7 +15,7 @@ def load_commonsenseqa():
     """
     CommonsenseQA용 JSONL 로더
     """
-    file_path = "/home/jewonyeom/LLMs-Are-Just-Shy_Reasoning-by-Intervention/injection/train_rand_split.jsonl"
+    file_path = "YOUR_JSON_PATH"
     data = []
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -47,14 +47,22 @@ def main():
                         help="디코딩 시 최대 토큰 개수")
     parser.add_argument("--output_dir", type=str, default=".",
                         help="결과물을 저장할 디렉터리")
+
     parser.add_argument("--top_k_value", type=int, default=10,
                         help="(top_k_injection)에서 사용할 k 값 (기본=10)")
     parser.add_argument("--injection_token", type=str, default="Step",
                         help="(top_k_injection, zs_next_step 등)에서 사용할 삽입 문자열 (기본='Step')")
     parser.add_argument("--patience_value", type=int, default=50,
                         help="(zs_top_k_multi_inject_patience)에서 사용할 patience 길이 (기본=50)")
+
     parser.add_argument("--with_cot_init", action="store_true",
                         help="top_k_injection 시, prompt 앞에 'Let's think step by step.'를 넣을지 여부")
+
+    parser.add_argument("--token_pool", type=str, default=None,
+                        help="토큰 풀 이름 (예: 'addition', 'contrast', 'mix' 등). "
+                             "None이면 단일 --injection_token 사용")
+    parser.add_argument("--random_seed", type=int, default=1,
+                        help="매 문제마다 풀에서 랜덤 토큰을 고를 때 사용할 시드")
 
 
     args = parser.parse_args()
@@ -68,14 +76,37 @@ def main():
     else:
         llm = None
 
+    dset_name_lower = args.dataset.lower()
+
     # 2) Dataset 로드 분기
-    if args.dataset.lower() == "commonsenseqa":
-        dataset = load_commonsenseqa()
-    elif "math-500" in args.dataset.lower():
-        # MATH-500
-        dataset = load_dataset(args.dataset)
+    if dset_name_lower == "commonsenseqa":
+        # CommonsenseQA JSONL 등 커스텀 로더
+        dataset = load_commonsenseqa()  
+    elif "openai/gsm8k" in dset_name_lower:
+        dataset = load_dataset("openai/gsm8k", "main")
+    elif "math-500" in dset_name_lower:
+        dataset = load_dataset("HuggingFaceH4/MATH-500")
+    elif "chilled/lastletterconcat" in dset_name_lower:
+        dataset = load_dataset(args.dataset, split="test")
+    elif "chilled/multiarith" in dset_name_lower:
+        dataset = load_dataset(args.dataset, split="test")
+    elif "chilled/aqua" in dset_name_lower:
+        dataset = load_dataset(args.dataset, split="test")
+    elif "chilled/strategyqa" in dset_name_lower:
+        dataset = load_dataset(args.dataset, split="test")
+    elif "yoonholee/last-letter-concatenation" in dset_name_lower:
+        dataset = load_dataset(args.dataset, split="train")
+    elif "lukaemon/bbh" in dset_name_lower:
+        if "lukaemon/bbh/logical_deduction" in dset_name_lower:
+            dataset = load_dataset("lukaemon/bbh", "logical_deduction_five_objects")
+        elif "lukaemon/bbh/disambiguation_qa" in dset_name_lower:
+            dataset = load_dataset("lukaemon/bbh", "disambiguation_qa")
+        elif "lukaemon/bbh/web_of_lies" in dset_name_lower:
+            dataset = load_dataset("lukaemon/bbh", "web_of_lies")
+        else:
+            dataset = load_dataset("lukaemon/bbh", "date_understanding")
     else:
-        # GSM8K 등
+        # 기본
         dataset = load_dataset(args.dataset)
 
     # 3) 로컬 모델 & 토크나이저 로드
@@ -99,7 +130,9 @@ def main():
         top_k_value=args.top_k_value,
         injection_token=args.injection_token,
         patience_value=args.patience_value,
-        with_cot_init=args.with_cot_init
+        with_cot_init=args.with_cot_init,
+        token_pool=args.token_pool,
+        random_seed=args.random_seed,
     )
 
 if __name__ == "__main__":
